@@ -174,7 +174,7 @@ static int create_window(void)
     attr.background_pixel = WhitePixel(dpy, screen);
     attr.border_pixel = BlackPixel(dpy, screen);
 
-    win = XCreateWindow(dpy, root, -2000, -2000, 620, 420, 1,
+    win = XCreateWindow(dpy, root, -2000, -2000, 620, 280, 1,
                         DefaultDepth(dpy, screen), InputOutput,
                         DefaultVisual(dpy, screen),
                         CWOverrideRedirect | CWEventMask |
@@ -265,7 +265,7 @@ static int create_window(void)
                        DefaultColormap(dpy, screen), &rc_white, &xft_fg_white);
 
     popup_x = (DisplayWidth(dpy, screen) - 620) / 2;
-    popup_y = (DisplayHeight(dpy, screen) - 420) / 3;
+    popup_y = (DisplayHeight(dpy, screen) - 280) / 3;
     return 0;
 }
 
