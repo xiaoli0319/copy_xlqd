@@ -1,0 +1,25 @@
+# 可执行文件
+copy_xlqd
+
+# 编译产物
+*.o
+
+# 运行时文件
+*.pid
+*.dat
+*.log
+history.dat
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 构建目录
+build/
+dist/
