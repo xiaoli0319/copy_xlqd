@@ -1,2 +1,26 @@
-编译
-gcc -O2 -o copy_xlqd main.c -I/usr/include/freetype2 -lX11 -lXfixes -lXft -lfreetype
+# copy_xlqd
+
+> 一款轻量级、基于 X11 的剪贴板管理器，支持持久化历史记录与快捷键呼出弹窗。
+
+## ✨ 特性
+- 📋 **自动监听**：通过 `XFixes` 扩展实时捕获剪贴板变更
+- 💾 **持久化存储**：内存缓存最多 500 条记录，自动写入磁盘，重启不丢失
+- ⌨️ **极速弹窗**：单例守护进程 + `SIGUSR1` IPC，一键呼出/隐藏
+- 🌍 **完美中文支持**：基于 `Xft` + `Fontconfig` 渲染，完整支持 UTF-8 与 CJK 字符
+- 🔒 **零依赖/轻量**：纯 C 实现，无外部 UI 框架，资源占用极低
+- 🔄 **智能去重**：连续复制相同内容自动跳过，节省空间
+
+## 📦 依赖
+编译与运行需要以下 X11 相关开发库：
+
+| 发行版       | 安装命令                                                                 |
+|--------------|--------------------------------------------------------------------------|
+| Debian/Ubuntu| `sudo apt install build-essential libx11-dev libxfixes-dev libxft-dev libfontconfig1-dev` |
+| Arch Linux   | `sudo pacman -S base-devel libx11 libxfixes libxft fontconfig`           |
+| Fedora       | `sudo dnf install gcc libX11-devel libXfixes-devel libXft-devel fontconfig-devel` |
+
+> 💡 建议安装 Noto CJK 字体以获得最佳渲染效果：`sudo apt install fonts-noto-cjk` (Debian/Ubuntu)
+
+## 🛠 编译
+```bash
+gcc -O2 -o copy_xlqd main.c -I/usr/include/freetype2 $(pkg-config --cflags --libs fontconfig) -lX11 -lXfixes -lXft -lfreetype
