@@ -589,7 +589,7 @@ static void render(void)
     XClearWindow(dpy, win);
 
     /* title */
-    const char *title = "copy_xlqd  —  [1-9] select  ESC dismiss";
+    const char *title = "copy_xlqd  —  ↑↓ scroll  Enter select  ESC dismiss";
     xft_draw_utf8(20, y, title, strlen(title));
     y += line_h;
     XDrawLine(dpy, win, gc, 20, y + xft_font->descent, 600, y + xft_font->descent);
@@ -602,18 +602,15 @@ static void render(void)
     }
 
     int n = history_count < MAX_HISTORY ? history_count : MAX_HISTORY;
-    int start = n > 9 ? n - 9 : 0;
 
-    for (int i = n - 1; i >= start; i--)
+    /* Draw visible rows */
+    for (int i = 0; i < DISPLAY_ROWS && scroll_offset + i < n; i++)
     {
-        int idx = i % MAX_HISTORY;
+        int idx = (history_count - 1 - (scroll_offset + i)) % MAX_HISTORY;
         ClipItem *item = &history[idx];
-        int num = n - 1 - i + 1;
+        int item_num = n - (scroll_offset + i);
 
-        /* Build "[N] " prefix */
-        int prefix_len = snprintf(buf, sizeof(buf), "[%d] ", num);
-
-        /* Append up to ~56 bytes of text, replacing newlines with spaces */
+        int prefix_len = snprintf(buf, sizeof(buf), "[%d] ", item_num);
         int copy_len = item->len;
         if (copy_len > (int)(sizeof(buf) - prefix_len - 1))
             copy_len = (int)(sizeof(buf) - prefix_len - 1);
@@ -623,7 +620,19 @@ static void render(void)
             if ((unsigned char)buf[k] < 0x20 && buf[k] != '\0')
                 buf[k] = ' ';
 
-        xft_draw_utf8(20, y, buf, strlen(buf));
+        /* Highlight selected row */
+        if (i == selected_idx)
+        {
+            XSetForeground(dpy, gc, BlackPixel(dpy, screen));
+            XFillRectangle(dpy, win, gc, 10, y - 2, 600, line_h);
+            xft_draw_utf8_white(20, y, buf, strlen(buf));
+            XSetForeground(dpy, gc, BlackPixel(dpy, screen));
+        }
+        else
+        {
+            xft_draw_utf8(20, y, buf, strlen(buf));
+        }
+
         y += line_h;
     }
 }
