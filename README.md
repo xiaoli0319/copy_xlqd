@@ -1,3 +1,22 @@
+做成全局命令
+# 创建用户本地 bin 目录
+mkdir -p ~/.local/bin
+
+# 复制可执行文件
+cp copy_xlqd ~/.local/bin/
+
+# 添加到 PATH（根据你的 shell 选择）
+# 对于 bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+
+# 对于 zsh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+
+# 重新加载配置
+source ~/.bashrc  # 或 source ~/.zshrc
+
+如何设置开机自启动呢
+echo '~/.local/bin/copy_xlqd > /dev/null 2>&1 & disown' >> ~/.bashrc
 # copy_xlqd
 
 > 一款轻量级、基于 X11 的剪贴板管理器，支持持久化历史记录与快捷键呼出弹窗。
