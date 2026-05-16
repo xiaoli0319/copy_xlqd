@@ -37,10 +37,6 @@ static int pending_selection = 0;
 static int popup_visible = 0;
 static int popup_x, popup_y;
 
-/* hotkey keycodes */
-static KeyCode kc_shift_l, kc_shift_r, kc_alt_l, kc_alt_r, kc_space;
-static int hotkey_was_down = 0;
-
 static void render(void);
 static void popup_show(void);
 static void popup_hide(void);
@@ -94,17 +90,6 @@ static int create_window(void)
 
     XFixesSelectSelectionInput(dpy, win, clip_atom,
                                XFixesSetSelectionOwnerNotifyMask);
-
-    /* cache hotkey keycodes */
-    kc_shift_l = XKeysymToKeycode(dpy, XK_Shift_L);
-    kc_shift_r = XKeysymToKeycode(dpy, XK_Shift_R);
-    kc_alt_l   = XKeysymToKeycode(dpy, XK_Alt_L);
-    kc_alt_r   = XKeysymToKeycode(dpy, XK_Alt_R);
-    kc_space   = XKeysymToKeycode(dpy, XK_space);
-
-    fprintf(stderr,
-        "debug: Shift_L=%d Shift_R=%d Alt_L=%d Alt_R=%d Space=%d\n",
-        kc_shift_l, kc_shift_r, kc_alt_l, kc_alt_r, kc_space);
 
     /* save center position for popup */
     popup_x = (DisplayWidth(dpy, screen) - 600) / 2;
@@ -170,52 +155,6 @@ static void read_clipboard(void)
            len < 80 ? len : 80, item->text);
 
     XFree(data);
-}
-
-/* ---- hotkey detection ---- */
-
-/* check key state using XQueryKeymap */
-static int key_is_down(KeyCode kc)
-{
-    if (!kc) return 0;
-    char keys[32];
-    XQueryKeymap(dpy, keys);
-    return (keys[kc / 8] & (1 << (kc % 8))) != 0;
-}
-
-static void check_hotkey(void)
-{
-    if (popup_visible)
-        return;
-
-    char keys[32];
-    XQueryKeymap(dpy, keys);
-
-    int s = (kc_shift_l && (keys[kc_shift_l/8] & (1 << (kc_shift_l%8))))
-          || (kc_shift_r && (keys[kc_shift_r/8] & (1 << (kc_shift_r%8))));
-    int a = (kc_alt_l   && (keys[kc_alt_l/8]   & (1 << (kc_alt_l%8))))
-          || (kc_alt_r   && (keys[kc_alt_r/8]   & (1 << (kc_alt_r%8))));
-    int sp = kc_space && (keys[kc_space/8] & (1 << (kc_space%8)));
-
-    /* debug: print when shift+alt are held but space toggles */
-    if (s && a) {
-        static int last_sp = -1;
-        if (sp != last_sp) {
-            fprintf(stderr, "debug: hold Shift+Alt, Space=%d  (keymap byte[8]=0x%02x)\n",
-                    sp, (unsigned char)keys[8]);
-            last_sp = sp;
-        }
-    }
-
-    if (s && a && sp) {
-        if (!hotkey_was_down) {
-            fprintf(stderr, "debug: HOTKEY DETECTED\n");
-            popup_show();
-        }
-        hotkey_was_down = 1;
-    } else {
-        hotkey_was_down = 0;
-    }
 }
 
 /* ---- popup ---- */
@@ -294,90 +233,81 @@ int main(void)
         return 1;
 
     request_clipboard();
-    fprintf(stderr, "debug: entering main loop (hotkey: Shift+Alt+Space)\n");
+    fprintf(stderr, "debug: entering main loop (monitoring clipboard via XFixes)\n");
 
     XEvent ev;
     int running = 1;
 
     while (running) {
-        /* handle pending X events */
-        while (XPending(dpy)) {
-            XNextEvent(dpy, &ev);
+        /* 阻塞式等待事件，彻底告别 busy-loop 轮询 */
+        XNextEvent(dpy, &ev);
 
-            if (ev.type == fixes_event_base + XFixesSelectionNotify) {
-                request_clipboard();
-                continue;
-            }
-
-            switch (ev.type) {
-            case Expose:
-                if (ev.xexpose.count == 0 && popup_visible)
-                    render();
-                break;
-
-            case SelectionNotify:
-                read_clipboard();
-                if (popup_visible)
-                    render();
-                break;
-
-            case KeyPress:
-            case KeyRelease: {
-                if (!popup_visible)
-                    break;
-
-                if (ev.type == KeyRelease)
-                    break;
-
-                KeySym ks = XLookupKeysym(&ev.xkey, 0);
-                char buf[8] = {0};
-                XLookupString(&ev.xkey, buf, sizeof(buf), NULL, NULL);
-
-                if (ks == XK_Escape) {
-                    printf("dismiss\n");
-                    popup_hide();
-                    break;
-                }
-
-                if (buf[0] >= '1' && buf[0] <= '9') {
-                    int num = buf[0] - '0';
-                    int n = history_count < MAX_HISTORY ? history_count : MAX_HISTORY;
-                    if (num <= n) {
-                        int idx = (history_count - num) % MAX_HISTORY;
-                        printf("selected [%d]: %.*s\n", num,
-                               history[idx].len < 80 ? history[idx].len : 80,
-                               history[idx].text);
-                    }
-                    popup_hide();
-                    break;
-                }
-
-                printf("key: keysym=0x%lx char='%s'\n", (unsigned long)ks, buf);
-                break;
-            }
-
-            case FocusOut:
-                if (popup_visible)
-                    popup_hide();
-                break;
-
-            case ClientMessage:
-                if ((Atom)ev.xclient.data.l[0] == wm_delete_window)
-                    running = 0;
-                break;
-
-            case DestroyNotify:
-                running = 0;
-                break;
-            }
+        if (ev.type == fixes_event_base + XFixesSelectionNotify) {
+            request_clipboard();
+            continue;
         }
 
-        /* poll hotkey */
-        if (!popup_visible)
-            check_hotkey();
+        switch (ev.type) {
+        case Expose:
+            if (ev.xexpose.count == 0 && popup_visible)
+                render();
+            break;
 
-        /* sleep to avoid busy-loop */
-        usleep(30000); /* 30ms ≈ 33Hz polling */
+        case SelectionNotify:
+            read_clipboard();
+            if (popup_visible)
+                render();
+            break;
+
+        case KeyPress:
+        case KeyRelease: {
+            if (!popup_visible)
+                break;
+
+            if (ev.type == KeyRelease)
+                break;
+
+            KeySym ks = XLookupKeysym(&ev.xkey, 0);
+            char buf[8] = {0};
+            XLookupString(&ev.xkey, buf, sizeof(buf), NULL, NULL);
+
+            if (ks == XK_Escape) {
+                printf("dismiss\n");
+                popup_hide();
+                break;
+            }
+
+            if (buf[0] >= '1' && buf[0] <= '9') {
+                int num = buf[0] - '0';
+                int n = history_count < MAX_HISTORY ? history_count : MAX_HISTORY;
+                if (num <= n) {
+                    int idx = (history_count - num) % MAX_HISTORY;
+                    printf("selected [%d]: %.*s\n", num,
+                           history[idx].len < 80 ? history[idx].len : 80,
+                           history[idx].text);
+                }
+                popup_hide();
+                break;
+            }
+
+            printf("key: keysym=0x%lx char='%s'\n", (unsigned long)ks, buf);
+            break;
+        }
+
+        case FocusOut:
+            if (popup_visible)
+                popup_hide();
+            break;
+
+        case ClientMessage:
+            if ((Atom)ev.xclient.data.l[0] == wm_delete_window)
+                running = 0;
+            break;
+
+        case DestroyNotify:
+            running = 0;
+            break;
+        }
     }
 
     XFreeGC(dpy, gc);
