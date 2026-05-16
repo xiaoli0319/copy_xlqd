@@ -13,6 +13,7 @@
 #include <X11/extensions/Xfixes.h>
 #include <X11/Xft/Xft.h> /* UTF-8 / CJK rendering */
 #include <fontconfig/fontconfig.h>
+#define HISTORY_FILE "/home/xl/.local/share/copy_xlqd/history.dat"
 
 /* ------------------------------------------------------------------ */
 /*  IPC / single-instance                                              */
@@ -21,6 +22,9 @@
 #define PID_FILE "/tmp/copy_xlqd.pid"
 
 static int sig_pipe[2] = {-1, -1};
+
+static void save_history_to_file(void);
+static void load_history_from_file(void);
 
 static void handle_sigusr1(int sig)
 {
@@ -111,12 +115,14 @@ static int fixes_event_base;
 /* Xft (UTF-8 text rendering) */
 static XftFont *xft_font;
 static XftDraw *xft_draw;
-static XftColor xft_fg;
-static int line_h; /* pixels per row */
+static XftColor xft_fg;       /* 黑色 */
+static XftColor xft_fg_white; /* 白色（新增） */
+static int line_h;            /* pixels per row */
 
 /* clipboard history */
 #define MAX_HISTORY 500
 #define MAX_TEXT_LEN 4096
+#define DISPLAY_ROWS 9 /* rows visible per page */
 
 typedef struct
 {
@@ -127,6 +133,8 @@ typedef struct
 static ClipItem history[MAX_HISTORY];
 static int history_count = 0;
 static int pending_selection = 0;
+static int scroll_offset = 0; /* scroll position */
+static int selected_idx = 0;  /* currently selected index */
 
 /* clipboard write-back */
 static char owned_text[MAX_TEXT_LEN];
@@ -159,12 +167,14 @@ static int create_window(void)
 
     XSetWindowAttributes attr;
     attr.override_redirect = True;
+    /* NOTE: SelectionNotify / SelectionRequest arrive regardless of mask,
+     * but we must NOT include them here — they are not maskable per ICCCM. */
     attr.event_mask = ExposureMask | KeyPressMask | KeyReleaseMask |
                       FocusChangeMask | StructureNotifyMask;
     attr.background_pixel = WhitePixel(dpy, screen);
     attr.border_pixel = BlackPixel(dpy, screen);
 
-    win = XCreateWindow(dpy, root, -2000, -2000, 620, 50, 1,
+    win = XCreateWindow(dpy, root, -2000, -2000, 620, 420, 1,
                         DefaultDepth(dpy, screen), InputOutput,
                         DefaultVisual(dpy, screen),
                         CWOverrideRedirect | CWEventMask |
@@ -203,9 +213,9 @@ static int create_window(void)
     }
 
     FcPattern *pattern = FcPatternCreate();
-    FcPatternAddString(pattern, FC_FAMILY, (FcChar8 *)"Noto Sans Mono CJK SC"); /* 直接用中文字体 */
+    FcPatternAddString(pattern, FC_FAMILY, (FcChar8 *)"Noto Sans Mono CJK SC");
     FcPatternAddDouble(pattern, FC_SIZE, 12.0);
-    FcPatternAddString(pattern, FC_LANG, (FcChar8 *)"zh:en"); /* CJK + English */
+    FcPatternAddString(pattern, FC_LANG, (FcChar8 *)"zh:en");
     FcConfigSubstitute(NULL, pattern, FcMatchPattern);
     FcDefaultSubstitute(pattern);
 
@@ -214,7 +224,6 @@ static int create_window(void)
 
     if (match)
     {
-        /* Print matched font for debugging */
         FcChar8 *family = NULL;
         FcPatternGetString(match, FC_FAMILY, 0, &family);
         fprintf(stderr, "debug: Using font: %s\n", family ? (char *)family : "unknown");
@@ -250,9 +259,13 @@ static int create_window(void)
     XRenderColor rc = {0, 0, 0, 0xffff}; /* opaque black */
     XftColorAllocValue(dpy, DefaultVisual(dpy, screen),
                        DefaultColormap(dpy, screen), &rc, &xft_fg);
+    /* 新增：初始化白色 */
+    XRenderColor rc_white = {0xffff, 0xffff, 0xffff, 0xffff}; /* opaque white */
+    XftColorAllocValue(dpy, DefaultVisual(dpy, screen),
+                       DefaultColormap(dpy, screen), &rc_white, &xft_fg_white);
 
     popup_x = (DisplayWidth(dpy, screen) - 620) / 2;
-    popup_y = (DisplayHeight(dpy, screen) - 50) / 3;
+    popup_y = (DisplayHeight(dpy, screen) - 420) / 3;
     return 0;
 }
 
@@ -309,10 +322,98 @@ static void read_clipboard(void)
     history[idx].text[len] = '\0';
     history[idx].len = len;
     history_count++;
-
     fprintf(stderr, "clipboard[%d]: %.*s\n", history_count - 1,
             len < 80 ? len : 80, history[idx].text);
+
+    save_history_to_file(); /* 添加这一行 */
     XFree(data);
+}
+
+static void save_history_to_file(void)
+{
+    /* 创建目录（如果不存在） */
+    const char *home = getenv("HOME");
+    if (!home)
+        home = "/tmp";
+
+    char dir[256];
+    snprintf(dir, sizeof(dir), "%s/.local/share/copy_xlqd", home);
+    mkdir(dir, 0755); /* 忽略错误，可能已存在 */
+
+    char filepath[512];
+    snprintf(filepath, sizeof(filepath), "%s/history.dat", dir);
+
+    FILE *f = fopen(filepath, "wb");
+    if (!f)
+    {
+        perror("fopen history");
+        return;
+    }
+
+    /* 写入历史条数 */
+    int n = history_count < MAX_HISTORY ? history_count : MAX_HISTORY;
+    if (fwrite(&n, sizeof(int), 1, f) != 1)
+    {
+        perror("fwrite count");
+        fclose(f);
+        return;
+    }
+
+    /* 写入每条历史 */
+    for (int i = 0; i < n; i++)
+    {
+        int idx = (history_count - n + i) % MAX_HISTORY;
+        ClipItem *item = &history[idx];
+        if (fwrite(&item->len, sizeof(int), 1, f) != 1 ||
+            fwrite(item->text, 1, item->len, f) != (size_t)item->len)
+        {
+            perror("fwrite item");
+            fclose(f);
+            return;
+        }
+    }
+    fclose(f);
+}
+
+static void load_history_from_file(void)
+{
+    const char *home = getenv("HOME");
+    if (!home)
+        home = "/tmp";
+
+    char filepath[512];
+    snprintf(filepath, sizeof(filepath), "%s/.local/share/copy_xlqd/history.dat", home);
+
+    FILE *f = fopen(filepath, "rb");
+    if (!f)
+        return; /* 文件不存在，正常 */
+
+    int n = 0;
+    if (fread(&n, sizeof(int), 1, f) != 1)
+    {
+        fclose(f);
+        return;
+    }
+
+    for (int i = 0; i < n && i < MAX_HISTORY; i++)
+    {
+        int len = 0;
+        if (fread(&len, sizeof(int), 1, f) != 1)
+            break;
+
+        if (len > 0 && len < MAX_TEXT_LEN)
+        {
+            int idx = history_count % MAX_HISTORY;
+            if (fread(history[idx].text, 1, len, f) == (size_t)len)
+            {
+                history[idx].text[len] = '\0';
+                history[idx].len = len;
+                history_count++;
+            }
+        }
+    }
+    fclose(f);
+    fprintf(stderr, "info: loaded %d items from history file\n", n);
 }
 
 /* ------------------------------------------------------------------ */
@@ -409,6 +510,9 @@ static void popup_show(void)
     if (popup_visible)
         return;
 
+    scroll_offset = 0;
+    selected_idx = 0;
+
     XMoveWindow(dpy, win, popup_x, popup_y);
     XRaiseWindow(dpy, win);
     XSync(dpy, False);
@@ -467,6 +571,16 @@ static void xft_draw_utf8(int x, int y, const char *s, int len)
                       (const FcChar8 *)s, len);
 }
 
+/* Draw a UTF-8 string via Xft with white color */
+static void xft_draw_utf8_white(int x, int y, const char *s, int len)
+{
+    if (len <= 0)
+        return;
+    XftDrawStringUtf8(xft_draw, &xft_fg_white, xft_font,
+                      x, y + xft_font->ascent,
+                      (const FcChar8 *)s, len);
+}
+
 static void render(void)
 {
     char buf[640];
@@ -488,8 +602,7 @@ static void render(void)
     }
 
     int n = history_count < MAX_HISTORY ? history_count : MAX_HISTORY;
-    int start = n > 9 ? n - 9 : 0;  /* 改为显示所有条目 */
-    start = 0;  /* 显示从第一条开始 */
+    int start = n > 9 ? n - 9 : 0;
 
     for (int i = n - 1; i >= start; i--)
     {
@@ -555,6 +668,8 @@ int main(int argc, char *argv[])
     if (create_window() < 0)
         return 1;
 
+    load_history_from_file();
+
     request_clipboard();
     fprintf(stderr, "info: copy_xlqd running (pid %d)\n", (int)getpid());
 
@@ -612,7 +727,11 @@ int main(int argc, char *argv[])
             case SelectionNotify:
                 read_clipboard();
                 if (popup_visible)
+                {
+                    scroll_offset = 0;
+                    selected_idx = 0;
                     render();
+                }
                 break;
 
             case SelectionRequest:
@@ -631,8 +750,6 @@ int main(int argc, char *argv[])
                     break;
 
                 KeySym ks = XLookupKeysym(&ev.xkey, 0);
-                char kbuf[8] = {0};
-                XLookupString(&ev.xkey, kbuf, sizeof(kbuf), NULL, NULL);
 
                 if (ks == XK_Escape)
                 {
@@ -640,17 +757,45 @@ int main(int argc, char *argv[])
                     break;
                 }
 
-                if (kbuf[0] >= '1' && kbuf[0] <= '9')
+                if (ks == XK_Down)
                 {
-                    int num = kbuf[0] - '0';
-                    int n = history_count < MAX_HISTORY
-                                ? history_count
-                                : MAX_HISTORY;
-                    if (num <= n)
+                    int n = history_count < MAX_HISTORY ? history_count : MAX_HISTORY;
+                    int max_scroll = (n > DISPLAY_ROWS) ? (n - DISPLAY_ROWS) : 0;
+                    int max_selected = (n - scroll_offset > DISPLAY_ROWS) ? (DISPLAY_ROWS - 1) : (n - scroll_offset - 1);
+
+                    if (selected_idx < max_selected)
                     {
-                        int idx = (history_count - num) % MAX_HISTORY;
-                        /* Claim clipboard BEFORE hiding the popup so we
-                         * still hold the keyboard grab at claim time */
+                        selected_idx++;
+                    }
+                    else if (scroll_offset < max_scroll)
+                    {
+                        scroll_offset++;
+                    }
+                    render();
+                    break;
+                }
+
+                if (ks == XK_Up)
+                {
+                    if (selected_idx > 0)
+                    {
+                        selected_idx--;
+                    }
+                    else if (scroll_offset > 0)
+                    {
+                        scroll_offset--;
+                    }
+                    render();
+                    break;
+                }
+
+                if (ks == XK_Return)
+                {
+                    int n = history_count < MAX_HISTORY ? history_count : MAX_HISTORY;
+                    int selected_pos = scroll_offset + selected_idx;
+                    if (selected_pos < n)
+                    {
+                        int idx = (history_count - 1 - selected_pos) % MAX_HISTORY;
                         clipboard_claim(history[idx].text,
                                         history[idx].len,
                                         ev.xkey.time);
@@ -658,6 +803,7 @@ int main(int argc, char *argv[])
                     popup_hide();
                     break;
                 }
+
                 break;
             }
 
@@ -683,6 +829,8 @@ int main(int argc, char *argv[])
     XftDrawDestroy(xft_draw);
     XftColorFree(dpy, DefaultVisual(dpy, screen),
                  DefaultColormap(dpy, screen), &xft_fg);
+    XftColorFree(dpy, DefaultVisual(dpy, screen),
+                 DefaultColormap(dpy, screen), &xft_fg_white);
     XftFontClose(dpy, xft_font);
     XFreeGC(dpy, gc);
     XDestroyWindow(dpy, win);
