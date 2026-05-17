@@ -1,22 +1,3 @@
-做成全局命令
-# 创建用户本地 bin 目录
-mkdir -p ~/.local/bin
-
-# 复制可执行文件
-cp copy_xlqd ~/.local/bin/
-
-# 添加到 PATH（根据你的 shell 选择）
-# 对于 bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-
-# 对于 zsh
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-
-# 重新加载配置
-source ~/.bashrc  # 或 source ~/.zshrc
-
-如何设置开机自启动呢
-echo '~/.local/bin/copy_xlqd > /dev/null 2>&1 & disown' >> ~/.bashrc
 # copy_xlqd
 
 > 一款轻量级、基于 X11 的剪贴板管理器，支持持久化历史记录与快捷键呼出弹窗。
@@ -43,3 +24,28 @@ echo '~/.local/bin/copy_xlqd > /dev/null 2>&1 & disown' >> ~/.bashrc
 ## 🛠 编译
 ```bash
 gcc -O2 -o copy_xlqd main.c -I/usr/include/freetype2 $(pkg-config --cflags --libs fontconfig) -lX11 -lXfixes -lXft -lfreetype
+
+做成全局命令
+# 创建用户本地 bin 目录
+mkdir -p ~/.local/bin
+
+# 复制可执行文件
+cp copy_xlqd ~/.local/bin/
+
+# 添加到 PATH（根据你的 shell 选择）
+# 对于 bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+
+# 对于 zsh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+
+# 重新加载配置
+source ~/.bashrc  # 或 source ~/.zshrc
+
+如何设置开机自启动呢
+echo '~/.local/bin/copy_xlqd > /dev/null 2>&1 & disown' >> ~/.bashrc
+
+最后设置ubuntu自定义快捷键
+名称：为此快捷键起个名字（如：copy_xlqd）。
+命令：输入在终端中能运行该程序的指令（如启动对应的脚本或程序，copy_xlqd --toggle ）。
+快捷键：点击“设置快捷键...”，然后按下您想要的组合键（如 Ctrl + Shift + N）。
