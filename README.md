@@ -29,8 +29,7 @@
 
 ## 🛠 编译
 ```bash
-gcc -O2 -o copy_xlqd main.c -I/usr/include/freetype2 $(pkg-config --cflags --libs fontconfig) -lX11 -lXfixes -lXft -lfreetype
-gcc -Wall -Wextra -O2 -o copy_xlqd main.c -I/usr/include/freetype2 $(pkg-config --cflags --libs fontconfig) -lX11 -lXfixes -lXft -lfreetype
+make clean && make
 
 做成全局命令
 # 创建用户本地 bin 目录
@@ -49,7 +48,7 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 # 重新加载配置
 source ~/.bashrc  # 或 source ~/.zshrc
 
-如何设置开机自启动呢
+设置开机自启动
 echo '~/.local/bin/copy_xlqd > /dev/null 2>&1 & disown' >> ~/.bashrc
 
 最后设置ubuntu自定义快捷键
