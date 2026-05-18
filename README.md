@@ -30,6 +30,7 @@
 ## 🛠 编译
 ```bash
 gcc -O2 -o copy_xlqd main.c -I/usr/include/freetype2 $(pkg-config --cflags --libs fontconfig) -lX11 -lXfixes -lXft -lfreetype
+gcc -Wall -Wextra -O2 -o copy_xlqd main.c -I/usr/include/freetype2 $(pkg-config --cflags --libs fontconfig) -lX11 -lXfixes -lXft -lfreetype
 
 做成全局命令
 # 创建用户本地 bin 目录

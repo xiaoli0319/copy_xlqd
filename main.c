@@ -691,15 +691,55 @@ static void render(void)
         int idx = filtered_idx[fi];
         ClipItem *item = &history[idx];
 
-        int prefix_len = snprintf(buf, sizeof(buf), "[%d] ", filtered_num[fi]);
-        int copy_len = item->len;
-        if (copy_len > (int)(sizeof(buf) - prefix_len - 1))
-            copy_len = (int)(sizeof(buf) - prefix_len - 1);
-        memcpy(buf + prefix_len, item->text, copy_len);
-        buf[prefix_len + copy_len] = '\0';
-        for (int k = prefix_len; k < prefix_len + copy_len; k++)
-            if ((unsigned char)buf[k] < 0x20 && buf[k] != '\0')
-                buf[k] = ' ';
+	int prefix_len = snprintf(buf, sizeof(buf), "[%d] ", filtered_num[fi]);
+	int avail = (int)sizeof(buf) - prefix_len - 1;
+	int used = 0;
+
+	if (search_len > 0 && item->len > search_len)
+	{
+	    /* Find first match position (same logic as matches_search) */
+	    int match_pos = -1;
+	    for (int p = 0; p <= item->len - search_len; p++)
+	    {
+		int ok = 1;
+		for (int q = 0; q < search_len; q++)
+		{
+		    char tc = item->text[p + q];
+		    char sc = search_text[q];
+		    if (tc >= 'A' && tc <= 'Z') tc += 32;
+		    if (sc >= 'A' && sc <= 'Z') sc += 32;
+		    if (tc != sc) { ok = 0; break; }
+		}
+		if (ok) { match_pos = p; break; }
+	    }
+
+	    if (match_pos >= 0)
+	    {
+		int ctx = 20;
+		int s = match_pos - ctx; if (s < 0) s = 0;
+		int e = match_pos + search_len + ctx; if (e > item->len) e = item->len;
+
+		if (s > 0 && used + 2 < avail) { buf[prefix_len + used++] = '.'; buf[prefix_len + used++] = '.'; }
+		int copy_len = e - s;
+		if (copy_len > avail - used) copy_len = avail - used;
+		memcpy(buf + prefix_len + used, item->text + s, copy_len);
+		used += copy_len;
+		if (e < item->len && used + 2 < avail) { buf[prefix_len + used++] = '.'; buf[prefix_len + used++] = '.'; }
+	    }
+	}
+
+	if (used == 0)
+	{
+	    int copy_len = item->len;
+	    if (copy_len > avail) copy_len = avail;
+	    memcpy(buf + prefix_len, item->text, copy_len);
+	    used = copy_len;
+	}
+
+	buf[prefix_len + used] = '\0';
+	for (int k = prefix_len; k < prefix_len + used; k++)
+	    if ((unsigned char)buf[k] < 0x20 && buf[k] != '\0')
+		buf[k] = ' ';
 
         /* Highlight selected row */
         if (i == selected_idx)
