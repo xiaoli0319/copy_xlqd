@@ -140,6 +140,13 @@ static int selected_idx = 0;  /* currently selected index */
 static char owned_text[MAX_TEXT_LEN];
 static int owned_len = 0;
 
+/* fuzzy search */
+static char search_text[MAX_TEXT_LEN];
+static int search_len = 0;
+static int filtered_idx[MAX_HISTORY];
+static int filtered_num[MAX_HISTORY];
+static int filtered_count = 0;
+
 /* popup */
 static int popup_visible = 0;
 static int popup_x, popup_y;
@@ -149,6 +156,7 @@ static int popup_x, popup_y;
 /* ------------------------------------------------------------------ */
 
 static void render(void);
+static void filter_history(void);
 static void popup_show(void);
 static void popup_hide(void);
 static void popup_toggle(void);
@@ -512,6 +520,9 @@ static void popup_show(void)
 
     scroll_offset = 0;
     selected_idx = 0;
+    search_len = 0;
+    search_text[0] = '\0';
+    filter_history();
 
     XMoveWindow(dpy, win, popup_x, popup_y);
     XRaiseWindow(dpy, win);
@@ -558,6 +569,54 @@ static void popup_toggle(void)
 }
 
 /* ------------------------------------------------------------------ */
+/*  fuzzy search                                                       */
+/* ------------------------------------------------------------------ */
+
+/* Case-insensitive fuzzy match: each char in search_text must appear
+ * in order within text (not necessarily consecutive). */
+static int matches_search(const char *text, int text_len)
+{
+    if (search_len == 0)
+        return 1;
+    int qi = 0;
+    for (int ti = 0; ti < text_len && qi < search_len; ti++)
+    {
+        char tc = text[ti];
+        char sc = search_text[qi];
+        if (tc >= 'A' && tc <= 'Z') tc += 32;
+        if (sc >= 'A' && sc <= 'Z') sc += 32;
+        if (tc == sc) qi++;
+    }
+    return qi == search_len;
+}
+
+/* Rebuild filtered_idx / filtered_num from history on search_text change. */
+static void filter_history(void)
+{
+    filtered_count = 0;
+    int n = history_count < MAX_HISTORY ? history_count : MAX_HISTORY;
+    int num = n;
+    for (int i = 0; i < n; i++)
+    {
+        int idx = (history_count - 1 - i) % MAX_HISTORY;
+        if (matches_search(history[idx].text, history[idx].len))
+        {
+            filtered_idx[filtered_count] = idx;
+            filtered_num[filtered_count] = num;
+            filtered_count++;
+        }
+        num--;
+    }
+    /* clamp */
+    if (scroll_offset >= filtered_count && filtered_count > 0)
+        scroll_offset = filtered_count - 1;
+    if (scroll_offset < 0) scroll_offset = 0;
+    if (selected_idx >= filtered_count)
+        selected_idx = filtered_count > 0 ? filtered_count - 1 : 0;
+    if (selected_idx < 0) selected_idx = 0;
+}
+
+/* ------------------------------------------------------------------ */
 /*  render  (Xft — handles UTF-8 / CJK)                               */
 /* ------------------------------------------------------------------ */
 
@@ -595,22 +654,39 @@ static void render(void)
     XDrawLine(dpy, win, gc, 20, y + xft_font->descent, 600, y + xft_font->descent);
     y += 6;
 
-    if (history_count == 0)
+    /* Search bar */
     {
-        xft_draw_utf8(20, y, "(empty)", 7);
+        XSetForeground(dpy, gc, BlackPixel(dpy, screen));
+        XDrawRectangle(dpy, win, gc, 10, y - 2, 580, line_h + 4);
+
+        char search_display[640];
+        int sn = snprintf(search_display, sizeof(search_display), "Search: %s", search_text);
+        xft_draw_utf8(20, y, search_display, sn);
+
+        /* Draw cursor at end of search text */
+        XGlyphInfo ext;
+        XftTextExtentsUtf8(dpy, xft_font, (FcChar8 *)search_text, search_len, &ext);
+        int cx = 20 + 7 * 8 + ext.xOff; /* "Search: " width ≈ 7 chars */
+        XDrawLine(dpy, win, gc, cx, y + 2, cx, y + line_h - 2);
+
+        y += line_h + 8;
+    }
+
+    if (filtered_count == 0)
+    {
+        xft_draw_utf8(20, y, search_len > 0 ? "(no match)" : "(empty)",
+                       search_len > 0 ? 10 : 7);
         return;
     }
 
-    int n = history_count < MAX_HISTORY ? history_count : MAX_HISTORY;
-
-    /* Draw visible rows */
-    for (int i = 0; i < DISPLAY_ROWS && scroll_offset + i < n; i++)
+    /* Draw visible rows (from filtered list) */
+    for (int i = 0; i < DISPLAY_ROWS && scroll_offset + i < filtered_count; i++)
     {
-        int idx = (history_count - 1 - (scroll_offset + i)) % MAX_HISTORY;
+        int fi = scroll_offset + i;
+        int idx = filtered_idx[fi];
         ClipItem *item = &history[idx];
-        int item_num = n - (scroll_offset + i);
 
-        int prefix_len = snprintf(buf, sizeof(buf), "[%d] ", item_num);
+        int prefix_len = snprintf(buf, sizeof(buf), "[%d] ", filtered_num[fi]);
         int copy_len = item->len;
         if (copy_len > (int)(sizeof(buf) - prefix_len - 1))
             copy_len = (int)(sizeof(buf) - prefix_len - 1);
@@ -737,6 +813,9 @@ int main(int argc, char *argv[])
                 read_clipboard();
                 if (popup_visible)
                 {
+                    search_len = 0;
+                    search_text[0] = '\0';
+                    filter_history();
                     scroll_offset = 0;
                     selected_idx = 0;
                     render();
@@ -762,55 +841,95 @@ int main(int argc, char *argv[])
 
                 if (ks == XK_Escape)
                 {
-                    popup_hide();
+                    if (search_len > 0)
+                    {
+                        search_len = 0;
+                        search_text[0] = '\0';
+                        filter_history();
+                        render();
+                    }
+                    else
+                    {
+                        popup_hide();
+                    }
+                    break;
+                }
+
+                if (ks == XK_BackSpace)
+                {
+                    if (search_len > 0)
+                    {
+                        /* Remove last UTF-8 character */
+                        do {
+                            search_len--;
+                        } while (search_len > 0 &&
+                                 ((unsigned char)search_text[search_len] & 0xC0) == 0x80);
+                        search_text[search_len] = '\0';
+                        filter_history();
+                        render();
+                    }
                     break;
                 }
 
                 if (ks == XK_Down)
                 {
-                    int n = history_count < MAX_HISTORY ? history_count : MAX_HISTORY;
-                    int max_scroll = (n > DISPLAY_ROWS) ? (n - DISPLAY_ROWS) : 0;
-                    int max_selected = (n - scroll_offset > DISPLAY_ROWS) ? (DISPLAY_ROWS - 1) : (n - scroll_offset - 1);
+                    if (filtered_count == 0) break;
+                    int max_scroll = (filtered_count > DISPLAY_ROWS) ? (filtered_count - DISPLAY_ROWS) : 0;
+                    int max_selected = (filtered_count - scroll_offset > DISPLAY_ROWS) ? (DISPLAY_ROWS - 1) : (filtered_count - scroll_offset - 1);
 
                     if (selected_idx < max_selected)
-                    {
                         selected_idx++;
-                    }
                     else if (scroll_offset < max_scroll)
-                    {
                         scroll_offset++;
-                    }
                     render();
                     break;
                 }
 
                 if (ks == XK_Up)
                 {
+                    if (filtered_count == 0) break;
                     if (selected_idx > 0)
-                    {
                         selected_idx--;
-                    }
                     else if (scroll_offset > 0)
-                    {
                         scroll_offset--;
-                    }
                     render();
                     break;
                 }
 
                 if (ks == XK_Return)
                 {
-                    int n = history_count < MAX_HISTORY ? history_count : MAX_HISTORY;
+                    if (filtered_count == 0) break;
                     int selected_pos = scroll_offset + selected_idx;
-                    if (selected_pos < n)
+                    if (selected_pos < filtered_count)
                     {
-                        int idx = (history_count - 1 - selected_pos) % MAX_HISTORY;
+                        int idx = filtered_idx[selected_pos];
                         clipboard_claim(history[idx].text,
                                         history[idx].len,
                                         ev.xkey.time);
                     }
                     popup_hide();
                     break;
+                }
+
+                /* Regular character input → fuzzy search */
+                {
+                    char buf[8] = {0};
+                    KeySym dummy;
+                    int len = XLookupString(&ev.xkey, buf, sizeof(buf), &dummy, NULL);
+                    if (len > 0 && search_len + len < MAX_TEXT_LEN)
+                    {
+                        int printable = 1;
+                        for (int i = 0; i < len; i++)
+                            if ((unsigned char)buf[i] < 0x20) { printable = 0; break; }
+                        if (printable)
+                        {
+                            memcpy(search_text + search_len, buf, len);
+                            search_len += len;
+                            search_text[search_len] = '\0';
+                            filter_history();
+                            render();
+                        }
+                    }
                 }
 
                 break;
