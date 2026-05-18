@@ -572,22 +572,27 @@ static void popup_toggle(void)
 /*  fuzzy search                                                       */
 /* ------------------------------------------------------------------ */
 
-/* Case-insensitive fuzzy match: each char in search_text must appear
- * in order within text (not necessarily consecutive). */
+/* Case-insensitive exact substring match */
 static int matches_search(const char *text, int text_len)
 {
     if (search_len == 0)
         return 1;
-    int qi = 0;
-    for (int ti = 0; ti < text_len && qi < search_len; ti++)
+    if (text_len < search_len)
+        return 0;
+    for (int i = 0; i <= text_len - search_len; i++)
     {
-        char tc = text[ti];
-        char sc = search_text[qi];
-        if (tc >= 'A' && tc <= 'Z') tc += 32;
-        if (sc >= 'A' && sc <= 'Z') sc += 32;
-        if (tc == sc) qi++;
+        int match = 1;
+        for (int j = 0; j < search_len; j++)
+        {
+            char tc = text[i + j];
+            char sc = search_text[j];
+            if (tc >= 'A' && tc <= 'Z') tc += 32;
+            if (sc >= 'A' && sc <= 'Z') sc += 32;
+            if (tc != sc) { match = 0; break; }
+        }
+        if (match) return 1;
     }
-    return qi == search_len;
+    return 0;
 }
 
 /* Rebuild filtered_idx / filtered_num from history on search_text change. */
