@@ -117,6 +117,7 @@ static XftFont *xft_font;
 static XftDraw *xft_draw;
 static XftColor xft_fg;       /* 黑色 */
 static XftColor xft_fg_white; /* 白色（新增） */
+static XftColor xft_fg_hl;    /* 红色（搜索高亮） */
 static int line_h;            /* pixels per row */
 
 /* clipboard history */
@@ -267,10 +268,15 @@ static int create_window(void)
     XRenderColor rc = {0, 0, 0, 0xffff}; /* opaque black */
     XftColorAllocValue(dpy, DefaultVisual(dpy, screen),
                        DefaultColormap(dpy, screen), &rc, &xft_fg);
-    /* 新增：初始化白色 */
-    XRenderColor rc_white = {0xffff, 0xffff, 0xffff, 0xffff}; /* opaque white */
+    /* 初始化白色 */
+    XRenderColor rc_white = {0xffff, 0xffff, 0xffff, 0xffff};
     XftColorAllocValue(dpy, DefaultVisual(dpy, screen),
                        DefaultColormap(dpy, screen), &rc_white, &xft_fg_white);
+
+    /* 初始化高亮红色 */
+    XRenderColor rc_hl = {0xffff, 0x4444, 0x4444, 0xffff}; /* 亮橙红 */
+    XftColorAllocValue(dpy, DefaultVisual(dpy, screen),
+                       DefaultColormap(dpy, screen), &rc_hl, &xft_fg_hl);
 
     popup_x = (DisplayWidth(dpy, screen) - 620) / 2;
     popup_y = (DisplayHeight(dpy, screen) - 280) / 3;
@@ -691,67 +697,104 @@ static void render(void)
         int idx = filtered_idx[fi];
         ClipItem *item = &history[idx];
 
-	int prefix_len = snprintf(buf, sizeof(buf), "[%d] ", filtered_num[fi]);
-	int avail = (int)sizeof(buf) - prefix_len - 1;
-	int used = 0;
+        int prefix_len = snprintf(buf, sizeof(buf), "[%d] ", filtered_num[fi]);
+        int content_off = 0;
+        int match_off = -1;
 
-	if (search_len > 0 && item->len > search_len)
-	{
-	    /* Find first match position (same logic as matches_search) */
-	    int match_pos = -1;
-	    for (int p = 0; p <= item->len - search_len; p++)
-	    {
-		int ok = 1;
-		for (int q = 0; q < search_len; q++)
-		{
-		    char tc = item->text[p + q];
-		    char sc = search_text[q];
-		    if (tc >= 'A' && tc <= 'Z') tc += 32;
-		    if (sc >= 'A' && sc <= 'Z') sc += 32;
-		    if (tc != sc) { ok = 0; break; }
-		}
-		if (ok) { match_pos = p; break; }
-	    }
+        if (search_len > 0 && item->len >= search_len)
+        {
+            int match_pos = -1;
+            for (int p = 0; p <= item->len - search_len; p++)
+            {
+                int ok = 1;
+                for (int q = 0; q < search_len; q++)
+                {
+                    char tc = item->text[p + q];
+                    char sc = search_text[q];
+                    if (tc >= 'A' && tc <= 'Z') tc += 32;
+                    if (sc >= 'A' && sc <= 'Z') sc += 32;
+                    if (tc != sc) { ok = 0; break; }
+                }
+                if (ok) { match_pos = p; break; }
+            }
 
-	    if (match_pos >= 0)
-	    {
-		int ctx = 20;
-		int s = match_pos - ctx; if (s < 0) s = 0;
-		int e = match_pos + search_len + ctx; if (e > item->len) e = item->len;
+            if (match_pos >= 0)
+            {
+                int ctx = 30;
+                int s = match_pos - ctx; if (s < 0) s = 0;
+                int e = match_pos + search_len + ctx; if (e > item->len) e = item->len;
+                int remain = (int)sizeof(buf) - prefix_len - 1;
 
-		if (s > 0 && used + 2 < avail) { buf[prefix_len + used++] = '.'; buf[prefix_len + used++] = '.'; }
-		int copy_len = e - s;
-		if (copy_len > avail - used) copy_len = avail - used;
-		memcpy(buf + prefix_len + used, item->text + s, copy_len);
-		used += copy_len;
-		if (e < item->len && used + 2 < avail) { buf[prefix_len + used++] = '.'; buf[prefix_len + used++] = '.'; }
-	    }
-	}
+                if (s > 0 && content_off + 2 < remain)
+                    { buf[prefix_len + content_off++] = '.'; buf[prefix_len + content_off++] = '.'; }
 
-	if (used == 0)
-	{
-	    int copy_len = item->len;
-	    if (copy_len > avail) copy_len = avail;
-	    memcpy(buf + prefix_len, item->text, copy_len);
-	    used = copy_len;
-	}
+                int before_len = match_pos - s;
+                if (before_len > 0 && content_off + before_len <= remain)
+                {
+                    memcpy(buf + prefix_len + content_off, item->text + s, before_len);
+                    content_off += before_len;
+                }
 
-	buf[prefix_len + used] = '\0';
-	for (int k = prefix_len; k < prefix_len + used; k++)
-	    if ((unsigned char)buf[k] < 0x20 && buf[k] != '\0')
-		buf[k] = ' ';
+                match_off = content_off;
 
-        /* Highlight selected row */
+                int mlen = search_len;
+                if (content_off + mlen > remain) mlen = remain - content_off;
+                if (mlen > 0)
+                {
+                    memcpy(buf + prefix_len + content_off, item->text + match_pos, mlen);
+                    content_off += mlen;
+                }
+
+                int after_start = match_pos + search_len;
+                int after_len = e - after_start;
+                if (after_len > 0 && content_off + after_len <= remain)
+                {
+                    memcpy(buf + prefix_len + content_off, item->text + after_start, after_len);
+                    content_off += after_len;
+                }
+
+                if (e < item->len && content_off + 2 < remain)
+                    { buf[prefix_len + content_off++] = '.'; buf[prefix_len + content_off++] = '.'; }
+            }
+        }
+
+        if (content_off == 0)
+        {
+            int copy_len = item->len;
+            int remain = (int)sizeof(buf) - prefix_len - 1;
+            if (copy_len > remain) copy_len = remain;
+            memcpy(buf + prefix_len, item->text, copy_len);
+            content_off = copy_len;
+        }
+
+        buf[prefix_len + content_off] = '\0';
+        for (int k = prefix_len; k < prefix_len + content_off; k++)
+            if ((unsigned char)buf[k] < 0x20)
+                buf[k] = ' ';
+
         if (i == selected_idx)
         {
             XSetForeground(dpy, gc, BlackPixel(dpy, screen));
             XFillRectangle(dpy, win, gc, 10, y - 2, 600, line_h);
-            xft_draw_utf8_white(20, y, buf, strlen(buf));
             XSetForeground(dpy, gc, BlackPixel(dpy, screen));
+            xft_draw_utf8_white(20, y, buf + prefix_len, content_off);
         }
         else
         {
-            xft_draw_utf8(20, y, buf, strlen(buf));
+            xft_draw_utf8(20, y, buf + prefix_len, content_off);
+        }
+
+        if (match_off >= 0)
+        {
+            XGlyphInfo gi;
+            XftTextExtentsUtf8(dpy, xft_font, (FcChar8 *)(buf + prefix_len), match_off, &gi);
+            int mx = 20 + gi.xOff;
+            int hl_len = search_len;
+            if (match_off + hl_len > content_off) hl_len = content_off - match_off;
+            if (hl_len > 0)
+                XftDrawStringUtf8(xft_draw, &xft_fg_hl, xft_font,
+                                  mx, y + xft_font->ascent,
+                                  (FcChar8 *)(buf + prefix_len + match_off), hl_len);
         }
 
         y += line_h;
@@ -1004,6 +1047,8 @@ int main(int argc, char *argv[])
                  DefaultColormap(dpy, screen), &xft_fg);
     XftColorFree(dpy, DefaultVisual(dpy, screen),
                  DefaultColormap(dpy, screen), &xft_fg_white);
+    XftColorFree(dpy, DefaultVisual(dpy, screen),
+                 DefaultColormap(dpy, screen), &xft_fg_hl);
     XftFontClose(dpy, xft_font);
     XFreeGC(dpy, gc);
     XDestroyWindow(dpy, win);
