@@ -1,4 +1,5 @@
 #include "common.h"
+#include <locale.h>
 
 /* ------------------------------------------------------------------ */
 /*  global variable definitions                                        */
@@ -61,6 +62,9 @@ Window   prev_focus_win = None;
 
 int main(int argc, char *argv[])
 {
+    setlocale(LC_ALL, "");           /* 必须最先 */
+    XSetLocaleModifiers("");         /* 读取 XMODIFIERS=@im=fcitx */
+    
     if (argc >= 2 && strcmp(argv[1], "--toggle") == 0)
         do_toggle_and_exit();
 
@@ -137,7 +141,7 @@ int main(int argc, char *argv[])
             XNextEvent(dpy, &ev);
 
             /* let input method filter compose events first */
-            if (xic && XFilterEvent(&ev, win))
+            if (xic && XFilterEvent(&ev, None))
                 continue;
 
             if (ev.type == fixes_event_base + XFixesSelectionNotify)
@@ -270,10 +274,14 @@ int main(int argc, char *argv[])
                         Status st;
                         KeySym kx;
                         len = Xutf8LookupString(xic, &ev.xkey,
-                                                buf, sizeof(buf) - 1,
-                                                &kx, &st);
+                                                buf, sizeof(buf) - 1, &kx, &st);
                         if (st == XBufferOverflow) break;
-                        if (st == XLookupKeySym || len <= 0) break;
+
+                        /* XLookupChars: 有字符无 keysym（CJK 上屏时常见）
+                        XLookupBoth:  有字符也有 keysym
+                        其余情况无可用字符 */
+                        if (st != XLookupChars && st != XLookupBoth)
+                            break;
                     }
                     else
                     {

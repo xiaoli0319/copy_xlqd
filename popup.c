@@ -149,9 +149,12 @@ void popup_show(void)
     if (popup_visible)
         return;
 
-    scroll_offset = 0;
-    selected_idx  = 0;
-    search_len    = 0;
+    int revert;
+    XGetInputFocus(dpy, &prev_focus_win, &revert);  /* 记录原焦点 */
+
+    scroll_offset  = 0;
+    selected_idx   = 0;
+    search_len     = 0;
     search_text[0] = '\0';
     filter_history();
 
@@ -162,36 +165,43 @@ void popup_show(void)
     XSetInputFocus(dpy, win, RevertToPointerRoot, CurrentTime);
     XSync(dpy, False);
 
-    popup_visible = 1;
-    render();
-    XFlush(dpy);
+    /* XIM 焦点必须在 Grab 之前设置 */
+    if (xic) XSetICFocus(xic);
 
-    int grab = XGrabKeyboard(dpy, win, True,
+    /* 保留 Grab，但 owner_events 改为 False：
+       所有键盘事件直接送到本窗口，再由 XFilterEvent 转给 XIM */
+    int grab = XGrabKeyboard(dpy, win, False,      /* ← False，不是 True */
                              GrabModeAsync, GrabModeAsync, CurrentTime);
     if (grab != GrabSuccess)
     {
-        usleep(20000);
-        grab = XGrabKeyboard(dpy, win, True,
+        usleep(30000);
+        grab = XGrabKeyboard(dpy, win, False,
                              GrabModeAsync, GrabModeAsync, CurrentTime);
     }
     if (grab != GrabSuccess)
         fprintf(stderr, "warn: XGrabKeyboard failed (%d)\n", grab);
 
+    popup_visible = 1;
+    render();
+    XFlush(dpy);
     fprintf(stderr, "info: popup shown\n");
-    if (xic) XSetICFocus(xic);
 }
 
 void popup_hide(void)
 {
     if (!popup_visible)
         return;
+
     if (xic) XUnsetICFocus(xic);
-    XUngrabKeyboard(dpy, CurrentTime);
-    XSync(dpy, False);
-    if (prev_focus_win != None && prev_focus_win != win)
-        XSetInputFocus(dpy, prev_focus_win, RevertToPointerRoot,
-                       CurrentTime);
+
+    /* 先把窗口移走，再还原焦点 */
     XMoveWindow(dpy, win, -2000, -2000);
+    XSync(dpy, False);
+
+    if (prev_focus_win != None && prev_focus_win != win)
+        XSetInputFocus(dpy, prev_focus_win,
+                       RevertToPointerRoot, CurrentTime);
+
     XSync(dpy, False);
     popup_visible = 0;
     fprintf(stderr, "info: popup hidden\n");
