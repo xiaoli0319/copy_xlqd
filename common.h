@@ -88,6 +88,7 @@ extern int      popup_y;
 extern int      scroll_offset;
 extern int      selected_idx;
 extern Window   prev_focus_win;
+extern int paste_to_search;   /* 1 = 下次 SelectionNotify 是粘贴到搜索框 */
 
 /* ------------------------------------------------------------------ */
 /*  function declarations                                             */

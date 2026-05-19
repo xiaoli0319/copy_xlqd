@@ -55,6 +55,7 @@ int      popup_y;
 int      scroll_offset = 0;
 int      selected_idx = 0;
 Window   prev_focus_win = None;
+int paste_to_search = 0;
 
 /* ------------------------------------------------------------------ */
 /*  main                                                               */
@@ -159,15 +160,57 @@ int main(int argc, char *argv[])
                 break;
 
             case SelectionNotify:
-                read_clipboard();
-                if (popup_visible)
+                if (paste_to_search)
                 {
-                    search_len    = 0;
-                    search_text[0] = '\0';
-                    filter_history();
-                    scroll_offset = 0;
-                    selected_idx  = 0;
-                    render();
+                    paste_to_search = 0;
+
+                    /* 读剪贴板内容插入搜索框 */
+                    Atom actual_type;
+                    int  actual_format;
+                    unsigned long nitems, bytes_after;
+                    unsigned char *data = NULL;
+
+                    if (XGetWindowProperty(dpy, win, prop_atom, 0, MAX_TEXT_LEN / 4,
+                                        True, AnyPropertyType,
+                                        &actual_type, &actual_format,
+                                        &nitems, &bytes_after, &data) == Success
+                        && data)
+                    {
+                        int len = (int)(nitems * (actual_format / 8));
+                        /* 只取能放进搜索框的部分，截到 UTF-8 字符边界 */
+                        int remain = MAX_TEXT_LEN - search_len - 1;
+                        if (len > remain)
+                        {
+                            len = remain;
+                            /* 退到合法 UTF-8 边界 */
+                            while (len > 0 &&
+                                ((unsigned char)data[len] & 0xC0) == 0x80)
+                                len--;
+                        }
+                        if (len > 0)
+                        {
+                            memcpy(search_text + search_len, data, len);
+                            search_len += len;
+                            search_text[search_len] = '\0';
+                            filter_history();
+                            render();
+                        }
+                        XFree(data);
+                    }
+                }
+                else
+                {
+                    /* 原有逻辑：读入剪贴板历史 */
+                    read_clipboard();
+                    if (popup_visible)
+                    {
+                        search_len     = 0;
+                        search_text[0] = '\0';
+                        filter_history();
+                        scroll_offset  = 0;
+                        selected_idx   = 0;
+                        render();
+                    }
                 }
                 break;
 
@@ -261,6 +304,16 @@ int main(int argc, char *argv[])
                                         ev.xkey.time);
                     }
                     popup_hide();
+                    break;
+                }
+
+                /* Ctrl+V 或 Shift+Insert → 粘贴到搜索框 */
+                if ((ks == XK_v && (ev.xkey.state & ControlMask)) ||
+                    (ks == XK_Insert && (ev.xkey.state & ShiftMask)))
+                {
+                    paste_to_search = 1;
+                    XConvertSelection(dpy, clip_atom, utf8_string,
+                                    prop_atom, win, ev.xkey.time);
                     break;
                 }
 
